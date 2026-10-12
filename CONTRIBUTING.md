@@ -13,9 +13,8 @@ Lees ook de [gedragscode](CODE_OF_CONDUCT.md). Een kwetsbaarheid meld je
   **geen opnames of transcripten van echte gesprekken** toe: daar staan
   persoonsgegevens in.
 - **Idee of feature:** beschrijf eerst het probleem van de gebruiker, en pas
-  daarna een oplossing. Grotere voorstellen werken we uit als document in
-  `docs/features/`. Is de feature gebouwd, dan gaat wat blijvend is naar de
-  README en verdwijnt het voorstel.
+  daarna een oplossing. Een groter voorstel bespreken we eerst in het issue,
+  voordat er code komt.
 
 ## Ontwikkelomgeving
 

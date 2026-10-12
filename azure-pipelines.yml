@@ -3,7 +3,7 @@
 #
 # One container: FastAPI serves the Vue build and the API. The
 # backend splits audio (up to 2 hours) into chunks and sends each one to the
-# transcription service: vlam-api of vlam.ai (SSC-ICT), see docs/vlam-ai.md. Its
+# transcription service: vlam-api of vlam.ai (SSC-ICT). Its
 # URL and key come from the secrets and live only as Container App secrets, never
 # in the image or the JS bundle. vlam-api keys expire after 6 months.
 #

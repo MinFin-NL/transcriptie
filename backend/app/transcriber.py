@@ -1,10 +1,10 @@
 """De koppeling met de transcriptiedienst: de enige plek die weet hoe die praat.
 
 In productie is dat vlam-api van vlam.ai (SSC-ICT); URL en sleutel komen uit de
-secrets. Het exacte formaat van vlam-api's `transcribe` is nog niet bekend (zie
-docs/vlam-ai.md). Deze adapter spreekt nu het formaat van Ollama's transcriptie-endpoint,
-waarmee we lokaal Voxtral draaien: een multipart-POST met `file`, `model` en
-optioneel `language`, en als antwoord `{"text": "..."}` (of platte tekst).
+secrets. vlam-api en Ollama (waarmee we lokaal Voxtral draaien) spreken
+allebei het OpenAI-formaat van `/audio/transcriptions`: een multipart-POST met
+`file`, `model` en optioneel `language`, en als antwoord `{"text": "..."}` (of
+platte tekst).
 Spreekt de dienst in Azure iets anders, dan verandert alleen dit bestand; de
 rest van de app ziet alleen `transcribe(pad, taal) -> tekst`.
 

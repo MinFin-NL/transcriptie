@@ -9,7 +9,7 @@ from pathlib import Path
 
 # Lokaal: Voxtral Small 24B in Ollama, via Ollama's transcriptie-endpoint.
 # In productie: vlam-api van vlam.ai (SSC-ICT); URL, sleutel en (eventueel)
-# model komen uit de secrets. Zie docs/vlam-ai.md.
+# model komen uit de secrets.
 DEFAULT_URL = "http://localhost:11434/v1/audio/transcriptions"
 DEFAULT_MODEL = "hf.co/bartowski/mistralai_Voxtral-Small-24B-2507-GGUF:Q4_K_M"
 
