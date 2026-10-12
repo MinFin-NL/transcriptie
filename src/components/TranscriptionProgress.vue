@@ -40,6 +40,8 @@ const heading = computed(() => {
       return 'In de wachtrij…'
     case 'converting':
       return 'Audio voorbereiden…'
+    case 'diarizing':
+      return 'Sprekers herkennen…'
     case 'transcribing':
       return props.progress.total > 1
         ? `Bezig met transcriberen: deel ${Math.min(props.progress.completed + 1, props.progress.total)} van ${props.progress.total}`
@@ -60,6 +62,8 @@ const barText = computed(() => (props.progress.phase === 'uploading' ? 'Uploaden
 const hint = computed(() => {
   const p = props.progress
   if (p.phase === 'queued') return 'Er wordt eerst een andere opname afgemaakt.'
+  if (p.phase === 'diarizing')
+    return 'Eerst wordt bepaald wie er wanneer spreekt, daarna wordt elke beurt uitgeschreven. Bij lange opnames kan dat even duren.'
   if (p.phase === 'transcribing' && p.durationSeconds)
     return `De opname duurt ${formatDuration(Math.round(p.durationSeconds))}. Lange opnames worden in stukken uitgeschreven; dat kan even duren.`
   return 'Laat dit venster open staan.'

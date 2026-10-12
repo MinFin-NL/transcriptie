@@ -8,6 +8,7 @@ from fastapi.testclient import TestClient
 from app.config import Settings
 from app.jobs import JobStore
 from app.main import create_app
+from app.turns import Segment
 
 
 class FakeTranscriber:
@@ -17,6 +18,33 @@ class FakeTranscriber:
     async def transcribe(self, path: Path, language: str | None) -> str:
         self.calls.append((path.name, language))
         return f"deel {len(self.calls)}"
+
+    async def transcribe_diarized(self, path: Path, language: str | None, num_speakers: int | None):
+        self.calls.append((path.name, language))
+        self.num_speakers = num_speakers
+        return [
+            Segment(0.0, 2.0, "SPEAKER_01", "Goedemiddag."),
+            Segment(2.0, 3.0, "SPEAKER_00", "Hallo."),
+            Segment(3.0, 5.0, "SPEAKER_00", "Ik heb een vraag."),
+        ]
+
+
+class FakeDiarizer:
+    def __init__(self, ok: bool = True):
+        self.ok = ok
+        self.num_speakers: int | None = None
+
+    def available(self) -> bool:
+        return self.ok
+
+    async def diarize(self, wav: Path, num_speakers: int | None) -> list[Segment]:
+        self.num_speakers = num_speakers
+        return [
+            Segment(0.0, 3.0, "B"),
+            Segment(3.0, 3.3, "A"),
+            Segment(3.4, 6.0, "B"),
+            Segment(6.0, 10.0, "A"),
+        ]
 
 
 def tone(path: Path, seconds: int) -> Path:
@@ -44,17 +72,22 @@ def tone(path: Path, seconds: int) -> Path:
     return path
 
 
-@pytest.fixture
-def setup(tmp_path):
-    settings = Settings(
+def make_settings(tmp_path, **kw) -> Settings:
+    return Settings(
         transcribe_url="http://example.invalid/v1/audio/transcriptions",
         max_duration_seconds=30,
         chunk_seconds=8,
         split_window_seconds=4,
         static_dir=tmp_path / "dist",
+        **kw,
     )
+
+
+@pytest.fixture
+def setup(tmp_path):
+    settings = make_settings(tmp_path)
     fake = FakeTranscriber()
-    store = JobStore(settings, fake)
+    store = JobStore(settings, fake, FakeDiarizer())
     with TestClient(create_app(settings, store)) as client:
         yield client, fake, store, tmp_path
 
@@ -87,6 +120,96 @@ def test_transcribes_in_chunks(setup):
     # Na afloop staat er geen audio meer op schijf.
     job = store.jobs[body["id"]]
     assert not job.workdir.exists()
+
+
+def test_local_speakers_diarize_then_transcribe_per_turn(setup):
+    client, fake, store, tmp = setup
+    mp3 = tone(tmp / "overleg.mp3", 10)
+    res = client.post(
+        "/api/v1/transcriptions",
+        files={"file": ("overleg.mp3", mp3.read_bytes(), "audio/mpeg")},
+        data={"speakers": "true", "numSpeakers": "2"},
+    )
+    assert res.status_code == 202
+    body = wait_done(client, res.headers["Location"])
+    assert body["status"] == "done", body
+    assert store.diarizer.num_speakers == 2
+    # Het tussenwerpsel van A (0,3 s) hoort bij de beurt van B: twee beurten.
+    assert [name for name, _ in fake.calls] == ["beurt-0000.wav", "beurt-0001.wav"]
+    assert body["speakers"] == [{"id": "S1"}, {"id": "S2"}]
+    assert body["segments"] == [
+        {"speaker": "S1", "start": 0.0, "end": 6.0, "text": "deel 1"},
+        {"speaker": "S2", "start": 6.0, "end": 10.0, "text": "deel 2"},
+    ]
+    assert body["text"] == "deel 1\n\ndeel 2"
+    assert not store.jobs[body["id"]].workdir.exists()
+
+
+def test_service_speakers_send_whole_recording(tmp_path):
+    settings = make_settings(tmp_path, diarization="service")
+    fake = FakeTranscriber()
+    with TestClient(create_app(settings, JobStore(settings, fake))) as client:
+        assert client.get("/api/v1/features").json() == {"speakers": True}
+        mp3 = tone(tmp_path / "gesprek.mp3", 20)
+        res = client.post(
+            "/api/v1/transcriptions",
+            files={"file": ("gesprek.mp3", mp3.read_bytes(), "audio/mpeg")},
+            data={"speakers": "true"},
+        )
+        body = wait_done(client, res.headers["Location"])
+    assert body["status"] == "done", body
+    # Eén aanvraag ondanks chunk_seconds=8: anders kloppen de labels niet.
+    assert [name for name, _ in fake.calls] == ["audio.wav"]
+    assert fake.num_speakers is None
+    assert body["speakers"] == [{"id": "S1"}, {"id": "S2"}]
+    assert body["segments"][1] == {
+        "speaker": "S2",
+        "start": 2.0,
+        "end": 5.0,
+        "text": "Hallo. Ik heb een vraag.",
+    }
+
+
+def test_without_speakers_no_segments(setup):
+    client, _, _, tmp = setup
+    mp3 = tone(tmp / "a.mp3", 4)
+    res = client.post("/api/v1/transcriptions", files={"file": ("a.mp3", mp3.read_bytes(), "audio/mpeg")})
+    body = wait_done(client, res.headers["Location"])
+    assert body["status"] == "done"
+    assert "segments" not in body
+
+
+def test_invalid_speaker_count_is_422(setup):
+    client, fake, _, tmp = setup
+    mp3 = tone(tmp / "a.mp3", 4)
+    res = client.post(
+        "/api/v1/transcriptions",
+        files={"file": ("a.mp3", mp3.read_bytes(), "audio/mpeg")},
+        data={"speakers": "true", "numSpeakers": "veel"},
+    )
+    assert res.status_code == 422
+    assert res.headers["content-type"] == "application/problem+json"
+    assert fake.calls == []
+
+
+def test_speakers_unavailable(tmp_path):
+    settings = make_settings(tmp_path)
+    store = JobStore(settings, FakeTranscriber(), FakeDiarizer(ok=False))
+    with TestClient(create_app(settings, store)) as client:
+        assert client.get("/api/v1/features").json() == {"speakers": False}
+        mp3 = tone(tmp_path / "a.mp3", 4)
+        res = client.post(
+            "/api/v1/transcriptions",
+            files={"file": ("a.mp3", mp3.read_bytes(), "audio/mpeg")},
+            data={"speakers": "true"},
+        )
+    assert res.status_code == 422
+
+
+def test_diarization_off(tmp_path):
+    settings = make_settings(tmp_path, diarization="off")
+    with TestClient(create_app(settings, JobStore(settings, FakeTranscriber(), FakeDiarizer()))) as client:
+        assert client.get("/api/v1/features").json() == {"speakers": False}
 
 
 def test_too_long_is_rejected_before_processing(setup):

@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { TranscriptionError } from '../services/transcriptionService'
+import { TranscriptionError, type Transcript } from '../services/transcriptionService'
 import { useTranscription } from './useTranscription'
 
 function deferred<T>() {
@@ -16,12 +16,12 @@ const audio = new Blob(['x'], { type: 'audio/webm' })
 
 describe('useTranscription', () => {
   it('goes busy → done with the text', async () => {
-    const d = deferred<string>()
+    const d = deferred<Transcript>()
     const t = useTranscription(() => d.promise)
     const run = t.start(audio, 'a.webm')
     expect(t.status.value).toBe('busy')
     expect(t.filename.value).toBe('a.webm')
-    d.resolve('Hallo')
+    d.resolve({ text: 'Hallo' })
     await run
     expect(t.status.value).toBe('done')
     expect(t.text.value).toBe('Hallo')
@@ -64,17 +64,60 @@ describe('useTranscription', () => {
   })
 
   it('ignores a stale result after a new start', async () => {
-    const first = deferred<string>()
-    const second = deferred<string>()
+    const first = deferred<Transcript>()
+    const second = deferred<Transcript>()
     const run = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise)
     const t = useTranscription(run)
     const a = t.start(audio, 'oud.webm')
     const b = t.start(audio, 'nieuw.webm')
-    second.resolve('nieuw')
+    second.resolve({ text: 'nieuw' })
     await b
-    first.resolve('oud')
+    first.resolve({ text: 'oud' })
     await a
     expect(t.text.value).toBe('nieuw')
     expect(t.filename.value).toBe('nieuw.webm')
+  })
+
+  it('keeps turns and lets the user name, merge and reassign speakers', async () => {
+    const segments = [
+      { speaker: 'S1', start: 0, end: 5, text: 'Goedemorgen.' },
+      { speaker: 'S2', start: 5, end: 8, text: 'Hallo.' },
+      { speaker: 'S3', start: 8, end: 9, text: 'Ja.' },
+      { speaker: 'S1', start: 9, end: 12, text: 'Zullen we beginnen?' },
+    ]
+    let seen: unknown
+    const t = useTranscription((_a, _f, opts) => {
+      seen = opts?.speakers
+      return Promise.resolve({ text: 'x', segments, durationSeconds: 12 })
+    })
+    await t.start(audio, 'a.webm', { enabled: true, count: 3 })
+    expect(seen).toEqual({ enabled: true, count: 3 })
+    expect(t.segments.value).toHaveLength(4)
+
+    t.rename('S2', 'Fatima')
+    expect(t.label('S2')).toBe('Fatima')
+    expect(t.label('S1')).toBe('Spreker 1')
+
+    // S3 is eigenlijk Fatima: haar twee beurten op rij worden één beurt.
+    t.mergeSpeaker('S3', 'S2')
+    expect(t.segments.value!.map((s) => [s.speaker, s.text])).toEqual([
+      ['S1', 'Goedemorgen.'],
+      ['S2', 'Hallo. Ja.'],
+      ['S1', 'Zullen we beginnen?'],
+    ])
+
+    // De laatste beurt is ook van Fatima.
+    t.reassign(2, 'S2')
+    expect(t.segments.value!.map((s) => [s.speaker, s.end])).toEqual([
+      ['S1', 5],
+      ['S2', 12],
+    ])
+
+    t.editTurn(0, 'Goedemorgen allemaal.')
+    expect(t.segments.value![0].text).toBe('Goedemorgen allemaal.')
+
+    t.reset()
+    expect(t.segments.value).toBeNull()
+    expect(t.names.value).toEqual({})
   })
 })

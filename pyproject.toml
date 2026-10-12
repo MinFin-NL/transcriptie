@@ -11,12 +11,33 @@ dependencies = [
     "python-multipart>=0.0.20",
 ]
 
+# Op Linux alleen de CPU-versie van torch: zonder CUDA scheelt dat gigabytes.
+# Op macOS het gewone pakket.
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu", marker = "sys_platform == 'linux'" }]
+
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
 [dependency-groups]
+# Sprekerherkenning in dit proces, voor als de transcriptiedienst het zelf niet
+# doet (Voxtral in Ollama). Alleen lokaal: in productie herkent vlam-api de
+# sprekers, dus het image heeft dit niet (uv sync --no-default-groups).
+# Zie backend/app/diarizer.py.
+diarization = [
+    "pyannote.audio>=4.0",
+    "torch>=2.8",
+]
 dev = [
     "pytest>=8",
     "pytest-asyncio>=0.24",
     "ruff>=0.8",
 ]
+
+[tool.uv]
+default-groups = ["dev", "diarization"]
 
 [tool.pytest.ini_options]
 testpaths = ["backend/tests"]

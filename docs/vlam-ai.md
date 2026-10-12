@@ -95,38 +95,51 @@ is:
 | URL van de dienst | secret `TRANSCRIBE_URL` (variable group `transcriptie-secrets`) | het `transcribe`-endpoint van vlam-api |
 | Sleutel | secret `TRANSCRIBE_API_KEY` | de vlam-api-sleutel. **Let op: verloopt na 6 maanden**, dus zet een herinnering om hem te vernieuwen |
 | Header voor de sleutel | `TRANSCRIBE_API_KEY_HEADER` (standaard `Authorization` → `Bearer <sleutel>`) | volgens het voorbeeldnotebook |
-| Model | `TRANSCRIBE_MODEL` | waarschijnlijk niet nodig (vlam.ai kiest het model); laat leeg als de API geen `model` vraagt |
-| Aanroep en antwoord | `backend/app/transcriber.py` | **aanpassen aan het formaat uit het notebook**; dit is het enige bestand dat ervan weet |
+| Model | `TRANSCRIBE_MODEL` | `vlam-transcribe-prepaid` |
+| Sprekerherkenning | `DIARIZATION` (de pipeline zet standaard `service`) | vlam-api herkent de sprekers zelf |
+| Aanroep en antwoord | `backend/app/transcriber.py` | het enige bestand dat het formaat kent |
 | Gelijktijdige aanvragen | `TRANSCRIBE_CONCURRENCY` (standaard 1) | hoogstens 5 volgens het fair-usebeleid |
 | Lengte van de stukken | `CHUNK_SECONDS` (standaard 600) | afstemmen op de grenzen van vlam-api (bestandsgrootte, duur), zodra die bekend zijn |
 
-De adapter stuurt nu een multipart-POST met `file` (16 kHz mono wav), `model`,
-`language` en `temperature`, en verwacht `{"text": "..."}` of platte tekst
-terug. Dat is het formaat van Ollama, dat we lokaal gebruiken. Wijkt vlam-api
-daarvan af, dan pas je alleen `Transcriber.transcribe` en `_text` aan. De
-tests in `backend/tests/test_transcriber.py` laten zien wat de rest van de app
-verwacht: `transcribe(pad, taal) -> tekst`.
+vlam-api spreekt het OpenAI-formaat (`/audio/transcriptions`), net als Ollama
+lokaal. De adapter stuurt een multipart-POST met `file` (16 kHz mono wav),
+`model`, `language` en `temperature`, en leest `{"text": "..."}`. De tests in
+`backend/tests/test_transcriber.py` laten zien wat de rest van de app verwacht.
 
-### Sprekerherkenning komt gratis mee
+### Sprekerherkenning
 
-vlam-api's transcriptie levert sprekerherkenning en tijdcodes per woord. Dat
-maakt de feature [meerdere sprekers](features/meerdere-sprekers.md) in
-productie veel eenvoudiger: de aparte diarisatiestap uit dat voorstel kan
-vervallen. De adapter vertaalt dan het antwoord van vlam-api naar de
-`segments`/`speakers` uit het datamodel daar. Lokaal (Voxtral via Ollama) zijn
-er geen sprekers.
+vlam-api herkent sprekers zelf. Vóór de transcriptie knipt
+[pyannote speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+(CC-BY-4.0) de opname op in stukken per spreker, en Voxtral schrijft elk stuk
+uit. Met `DIARIZATION=service` vraagt de adapter daarom:
+
+| Veld | Waarde |
+|---|---|
+| `response_format` | `diarized_json` |
+| `num_speakers` | het aantal dat de gebruiker koos, alleen als die het weet |
+
+Het antwoord heeft `segments` met per stuk `start`, `end`, `text` en
+`speaker` (`SPEAKER_00`, …). De backend maakt daar beurten van met sprekers
+`S1`, `S2`, … in volgorde van eerste keer spreken.
+
+vlam-api diariseert per aanvraag, dus `SPEAKER_00` in het ene stuk is niet per
+se `SPEAKER_00` in het andere. Daarom gaat bij sprekerherkenning de **hele
+opname in één aanvraag** (`DIARIZE_CHUNK_SECONDS`, standaard 2 uur, met
+`DIARIZE_TIMEOUT_SECONDS` als time-out). Moet het toch in stukken, dan houdt
+de backend de labels per stuk apart en voegt de gebruiker sprekers samen in
+de app.
+
+Lokaal (Voxtral via Ollama) doet de backend hetzelfde als vlam-api, met
+hetzelfde model: zie de README.
 
 ## Open punten vóór aansluiten
 
-- [ ] **Formaat van `transcribe`**: endpoint, velden, authenticatieheader en de
-      vorm van het antwoord (met sprekers en tijdcodes) uit het voorbeeldnotebook
-      halen, en de adapter plus tests daarop aanpassen.
+- [x] **Formaat van `transcribe`**: OpenAI-formaat, model
+      `vlam-transcribe-prepaid`, sprekers via `response_format=diarized_json`
+      (zie hierboven).
 - [ ] **Grenzen per aanvraag**: maximale bestandsgrootte en duur. Daarop
-      `CHUNK_SECONDS` instellen. Als vlam-api zelf 2 uur in één keer aankan,
-      kan het knippen op stiltes blijven (kortere aanvragen, betere voortgang)
-      of eruit. Let op: diarisatie per stuk geeft per stuk eigen sprekerlabels,
-      dus knippen en sprekerherkenning gaan niet zomaar samen. Zie het
-      sprekersvoorstel.
+      `CHUNK_SECONDS` instellen, en `DIARIZE_CHUNK_SECONDS` als vlam-api geen
+      2 uur in één aanvraag aankan.
 - [ ] **Netwerk**: is vlam-api bereikbaar vanuit de Azure Container
       Apps-omgeving? vlam.ai draait in een rijksdatacenter; mogelijk
       is een route via het Rijksnetwerk of een IP-allowlist aan de kant van

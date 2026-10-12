@@ -14,8 +14,8 @@ Lees ook de [gedragscode](CODE_OF_CONDUCT.md). Een kwetsbaarheid meld je
   persoonsgegevens in.
 - **Idee of feature:** beschrijf eerst het probleem van de gebruiker, en pas
   daarna een oplossing. Grotere voorstellen werken we uit als document in
-  [`docs/features/`](docs/features/), zoals
-  [meerdere sprekers](docs/features/meerdere-sprekers.md).
+  `docs/features/`. Is de feature gebouwd, dan gaat wat blijvend is naar de
+  README en verdwijnt het voorstel.
 
 ## Ontwikkelomgeving
 

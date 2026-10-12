@@ -59,3 +59,62 @@ async def test_auth_error_is_readable(wav):
 
 async def _no_sleep(_):
     return None
+
+
+# Zo antwoordt vlam-api met response_format=diarized_json.
+DIARIZED = {
+    "text": "Goedemiddag, u spreekt met de servicedesk. Hallo, ik heb een vraag.",
+    "usage": {"type": "duration", "seconds": 12},
+    "segments": [
+        {
+            "type": "transcript.text.segment",
+            "id": "seg_0",
+            "start": 0.031,
+            "end": 5.212,
+            "text": "Goedemiddag, u spreekt met de servicedesk.",
+            "speaker": "SPEAKER_01",
+        },
+        {
+            "type": "transcript.text.segment",
+            "id": "seg_1",
+            "start": 5.212,
+            "end": 8.587,
+            "text": " Hallo, ik heb een vraag. ",
+            "speaker": "SPEAKER_00",
+        },
+    ],
+}
+
+
+async def test_diarized_sends_format_and_speaker_count(wav):
+    seen = {}
+
+    def handler(req: httpx.Request):
+        seen["body"] = req.content
+        return httpx.Response(200, json=DIARIZED)
+
+    segments = await make(handler).transcribe_diarized(wav, "nl", 2)
+    assert b'name="response_format"\r\n\r\ndiarized_json' in seen["body"]
+    assert b'name="num_speakers"\r\n\r\n2' in seen["body"]
+    assert [(s.speaker, s.start, s.text) for s in segments] == [
+        ("SPEAKER_01", 0.031, "Goedemiddag, u spreekt met de servicedesk."),
+        ("SPEAKER_00", 5.212, "Hallo, ik heb een vraag."),
+    ]
+
+
+async def test_diarized_without_count_sends_no_hint(wav):
+    seen = {}
+
+    def handler(req: httpx.Request):
+        seen["body"] = req.content
+        return httpx.Response(200, json=DIARIZED)
+
+    await make(handler).transcribe_diarized(wav, None, None)
+    assert b"num_speakers" not in seen["body"]
+
+
+async def test_diarized_from_service_without_speakers_is_readable(wav):
+    # Ollama negeert diarized_json en geeft alleen tekst.
+    t = make(lambda req: httpx.Response(200, json={"text": "Hallo"}))
+    with pytest.raises(TranscriberError, match="geen sprekers"):
+        await t.transcribe_diarized(wav, None, None)

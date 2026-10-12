@@ -10,14 +10,45 @@
       variant="neutral"
       size="sm"
       text="Automatisch gegenereerd"
-      supporting-text="Spraakherkenning maakt fouten, vooral bij namen, vaktermen en door elkaar praten. Controleer en verbeter de tekst voordat je hem gebruikt."
+:supporting-text="
+        segments
+          ? 'Spraakherkenning maakt fouten, vooral bij namen, vaktermen en door elkaar praten, en een beurt kan bij de verkeerde spreker staan. Controleer en verbeter het transcript voordat je het gebruikt.'
+          : 'Spraakherkenning maakt fouten, vooral bij namen, vaktermen en door elkaar praten. Controleer en verbeter de tekst voordat je hem gebruikt.'
+      "
     />
 
-    <nldd-form-field label="Tekst" supporting-label="Je kunt de tekst hier aanpassen voordat je hem exporteert.">
+    <SpeakerTranscript
+      v-if="segments"
+      :segments="segments"
+      :names="names"
+      @rename="(id, name) => emit('rename', id, name)"
+      @merge="(from, into) => emit('merge', from, into)"
+      @reassign="(i, id) => emit('reassign', i, id)"
+      @edit="(i, value) => emit('edit', i, value)"
+    />
+
+    <nldd-form-field
+      v-else
+      label="Tekst"
+      supporting-label="Je kunt de tekst hier aanpassen voordat je hem exporteert."
+    >
       <nldd-multi-line-text-field :value="text" rows="14" resize="vertical" @input="onInput" />
     </nldd-form-field>
 
     <nldd-text color="secondary">{{ wordCount }} woorden</nldd-text>
+
+    <!-- Wat er in de export komt. Kopiëren en .txt volgen dezelfde keuze. -->
+    <nldd-form-field v-if="segments" label="In de export">
+      <nldd-container gap="8">
+        <nldd-checkbox-field label="Sprekernamen" :checked="options.names" @change="toggle('names', $event)" />
+        <nldd-checkbox-field label="Tijden" :checked="options.times" @change="toggle('times', $event)" />
+        <nldd-checkbox-field
+          label="Word-bestand als tabel (tijd, spreker, tekst)"
+          :checked="options.table"
+          @change="toggle('table', $event)"
+        />
+      </nldd-container>
+    </nldd-form-field>
 
     <nldd-button-group>
       <nldd-button appearance="primary" start-icon="copy" text="Kopiëren" @click="copy" />
@@ -48,12 +79,59 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { baseName, docxBlob, download, textBlob } from '../services/exportService'
+import { computed, onMounted, reactive, ref } from 'vue'
+import {
+  baseName,
+  docxBlob,
+  download,
+  speakerText,
+  textBlob,
+  type SpeakerExport,
+  type SpeakerExportOptions,
+} from '../services/exportService'
+import type { Segment } from '../services/transcriptionService'
 import { focusWhenRendered } from '../utils/focusWhenRendered'
+import { speakerLabel, type Names } from '../utils/turns'
+import SpeakerTranscript from './SpeakerTranscript.vue'
 
-const props = defineProps<{ text: string; filename: string }>()
-const emit = defineEmits<{ 'update:text': [value: string]; reset: [] }>()
+const props = withDefaults(
+  defineProps<{
+    text: string
+    filename: string
+    segments?: Segment[] | null
+    names?: Names
+    durationSeconds?: number | null
+  }>(),
+  { segments: null, names: () => ({}), durationSeconds: null },
+)
+const emit = defineEmits<{
+  'update:text': [value: string]
+  reset: []
+  rename: [speaker: string, name: string]
+  merge: [from: string, into: string]
+  reassign: [index: number, speaker: string]
+  edit: [index: number, text: string]
+}>()
+
+const options = reactive<Required<SpeakerExportOptions>>({ names: true, times: true, table: false })
+
+function toggle(key: keyof SpeakerExportOptions, event: Event) {
+  options[key] = !!(event as CustomEvent<{ checked?: boolean }>).detail?.checked
+}
+
+const speakerExport = computed<SpeakerExport | null>(() =>
+  props.segments
+    ? {
+        segments: props.segments,
+        label: (id) => speakerLabel(id, props.names),
+        options: { ...options },
+        durationSeconds: props.durationSeconds,
+      }
+    : null,
+)
+
+/** Wat kopiëren en .txt opleveren: met sprekers als verslag, anders de tekst. */
+const exportText = computed(() => (speakerExport.value ? speakerText(speakerExport.value) : props.text))
 
 const heading = ref<HTMLElement | null>(null)
 const docxBusy = ref(false)
@@ -69,7 +147,8 @@ let nextId = 0
 onMounted(() => focusWhenRendered(heading.value))
 
 const wordCount = computed(() => {
-  const words = props.text.trim().split(/\s+/).filter(Boolean)
+  const source = props.segments ? props.segments.map((s) => s.text).join(' ') : props.text
+  const words = source.trim().split(/\s+/).filter(Boolean)
   return words.length.toLocaleString('nl-NL')
 })
 
@@ -88,7 +167,7 @@ function onInput(event: Event) {
 
 async function copy() {
   try {
-    await navigator.clipboard.writeText(props.text)
+    await navigator.clipboard.writeText(exportText.value)
     notify('success', 'Tekst gekopieerd naar het klembord')
   } catch {
     notify('critical', 'Kopiëren lukte niet. Selecteer de tekst en kopieer hem met Ctrl+C.')
@@ -96,14 +175,15 @@ async function copy() {
 }
 
 function exportTxt() {
-  download(textBlob(props.text), `${baseName(props.filename)}.txt`)
+  download(textBlob(exportText.value), `${baseName(props.filename)}.txt`)
 }
 
 async function exportDocx() {
   docxBusy.value = true
   try {
     const name = baseName(props.filename)
-    download(await docxBlob(props.text, `Transcript ${props.filename}`), `${name}.docx`)
+    const blob = await docxBlob(props.text, `Transcript ${props.filename}`, speakerExport.value ?? undefined)
+    download(blob, `${name}.docx`)
   } catch {
     notify('critical', 'Het Word-bestand kon niet worden gemaakt. Probeer de .txt-export.')
   } finally {

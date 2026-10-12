@@ -42,13 +42,27 @@
 
               <!-- v-show, niet v-if: een gekozen bestand of opname blijft staan
                    als je even naar het andere tabblad kijkt. -->
-              <AudioUpload v-show="mode === 'upload'" @submit="start" />
-              <AudioRecorder v-show="mode === 'record'" @submit="start" @recording-change="recording = $event" />
+              <SpeakerOptions v-if="speakersAvailable" v-model="speakerOptions" :disabled="recording" />
+
+              <AudioUpload v-show="mode === 'upload'" @submit="submit" />
+              <AudioRecorder v-show="mode === 'record'" @submit="submit" @recording-change="recording = $event" />
             </template>
 
             <TranscriptionProgress v-else-if="status === 'busy'" :filename="filename" :elapsed-seconds="elapsedSeconds" :progress="progress" @cancel="cancel" />
 
-            <TranscriptResult v-else v-model:text="text" :filename="filename" @reset="reset" />
+            <TranscriptResult
+              v-else
+              v-model:text="text"
+              :filename="filename"
+              :segments="segments"
+              :names="names"
+              :duration-seconds="durationSeconds"
+              @reset="reset"
+              @rename="rename"
+              @merge="mergeSpeaker"
+              @reassign="reassign"
+              @edit="editTurn"
+            />
           </nldd-container>
         </nldd-card>
       </nldd-simple-section>
@@ -68,6 +82,12 @@
               is het weg.
             </li>
             <li>De tekst is gemaakt door spraakherkenning (AI). Controleer hem altijd voordat je hem gebruikt.</li>
+            <li v-if="speakersAvailable">
+              Sprekerherkenning deelt de opname op in beurten door stemmen met elkaar te vergelijken. Dat gebeurt
+              alleen binnen deze ene opname: er wordt niemand herkend en er worden geen stemkenmerken bewaard. Het gaat
+              soms mis, vooral als mensen door elkaar praten of op elkaar lijken. Namen die je invult blijven in je
+              browser.
+            </li>
           </ul>
         </nldd-rich-text>
       </nldd-simple-section>
@@ -90,16 +110,48 @@
 import { onBeforeUnmount, onMounted, ref } from 'vue'
 import AudioRecorder from './components/AudioRecorder.vue'
 import AudioUpload from './components/AudioUpload.vue'
+import SpeakerOptions from './components/SpeakerOptions.vue'
 import TranscriptionProgress from './components/TranscriptionProgress.vue'
 import TranscriptResult from './components/TranscriptResult.vue'
 import { useTranscription } from './composables/useTranscription'
+import { fetchFeatures, type SpeakerOptions as SpeakerChoice } from './services/transcriptionService'
 
 type Mode = 'upload' | 'record'
 
 const mode = ref<Mode>('upload')
 const recording = ref(false)
 
-const { status, text, error, filename, elapsedSeconds, progress, start, cancel, retry, reset } = useTranscription()
+const {
+  status,
+  text,
+  segments,
+  names,
+  durationSeconds,
+  error,
+  filename,
+  elapsedSeconds,
+  progress,
+  start,
+  cancel,
+  retry,
+  reset,
+  rename,
+  mergeSpeaker,
+  reassign,
+  editTurn,
+} = useTranscription()
+
+// Sprekerherkenning alleen aanbieden als de server het kan. Standaard aan: de
+// app wordt vooral gebruikt voor overleggen.
+const speakersAvailable = ref(false)
+const speakerOptions = ref<SpeakerChoice>({ enabled: true })
+onMounted(async () => {
+  speakersAvailable.value = (await fetchFeatures()).speakers
+})
+
+function submit(audio: Blob, name: string) {
+  void start(audio, name, speakersAvailable.value ? speakerOptions.value : undefined)
+}
 
 function onModeChange(event: Event) {
   const value = (event as CustomEvent<{ value?: string }>).detail?.value

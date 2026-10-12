@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { API, transcribe, TranscriptionError, type Progress } from './transcriptionService'
+import { API, fetchFeatures, FEATURES, transcribe, TranscriptionError, type Progress } from './transcriptionService'
 
 // Minimale XMLHttpRequest voor de upload: genoeg om status en body te sturen.
 class FakeXhr {
@@ -73,15 +73,49 @@ describe('transcribe', () => {
     const run = transcribe(new Blob(['x']), 'overleg.mp3', { language: 'nl', onProgress: (p) => seen.push(p) })
     await vi.runAllTimersAsync()
 
-    await expect(run).resolves.toBe('Goedemorgen.')
+    await expect(run).resolves.toEqual({ text: 'Goedemorgen.', segments: undefined, durationSeconds: null })
     expect(FakeXhr.last?.method).toBe('POST')
     expect(FakeXhr.last?.url).toBe(API)
     expect((FakeXhr.last?.sent?.get('file') as File).name).toBe('overleg.mp3')
     expect(FakeXhr.last?.sent?.get('language')).toBe('nl')
+    expect(FakeXhr.last?.sent?.has('speakers')).toBe(false)
     expect(fetchMock.mock.calls[0][0]).toBe(`${API}/j1`)
     expect(seen).toContainEqual({ phase: 'uploading', fraction: 0.5 })
     expect(seen).toContainEqual({ phase: 'queued' })
     expect(seen).toContainEqual({ phase: 'transcribing', completed: 1, total: 3, durationSeconds: 1800 })
+  })
+
+  it('asks for speakers and returns the turns', async () => {
+    FakeXhr.next = { status: 202, body: job({}) }
+    const segments = [
+      { speaker: 'S1', start: 0, end: 5.2, text: 'Goedemiddag.' },
+      { speaker: 'S2', start: 5.2, end: 8.6, text: 'Hallo.' },
+    ]
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(job({ status: 'diarizing' })))
+      .mockResolvedValueOnce(json(job({ status: 'done', text: 'Goedemiddag.\n\nHallo.', durationSeconds: 9, segments })))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const seen: Progress[] = []
+    const run = transcribe(new Blob(['x']), 'gesprek.wav', {
+      speakers: { enabled: true, count: 2 },
+      onProgress: (p) => seen.push(p),
+    })
+    await vi.runAllTimersAsync()
+
+    await expect(run).resolves.toEqual({ text: 'Goedemiddag.\n\nHallo.', segments, durationSeconds: 9 })
+    expect(FakeXhr.last?.sent?.get('speakers')).toBe('true')
+    expect(FakeXhr.last?.sent?.get('numSpeakers')).toBe('2')
+    expect(seen).toContainEqual({ phase: 'diarizing' })
+  })
+
+  it('reads the features, and assumes none when that fails', async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(json({ speakers: true })).mockRejectedValueOnce(new Error('weg'))
+    vi.stubGlobal('fetch', fetchMock)
+    await expect(fetchFeatures()).resolves.toEqual({ speakers: true })
+    expect(fetchMock.mock.calls[0][0]).toBe(FEATURES)
+    await expect(fetchFeatures()).resolves.toEqual({ speakers: false })
   })
 
   it('shows the problem detail of a rejected upload', async () => {

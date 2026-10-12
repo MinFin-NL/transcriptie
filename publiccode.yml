@@ -44,7 +44,8 @@ description:
       - Audiobestand uploaden (mp3, m4a, wav, webm, ogg, mp4)
       - Opnemen in de browser
       - Opnames tot 2 uur, opgeknipt in stukken met voortgangsweergave
-      - Transcript bewerken, kopiëren en exporteren als .txt en .docx
+      - Sprekerherkenning met beurten per spreker, namen geven, sprekers samenvoegen
+      - Transcript bewerken, kopiëren en exporteren als .txt en .docx (ook als gespreksverslag)
       - Verwisselbare transcriptiedienst (Voxtral via Ollama, vlam-api)
 
 legal:

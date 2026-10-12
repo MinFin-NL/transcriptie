@@ -7,6 +7,7 @@
 // onderweg raken, en zou de gebruiker niets laten zien.
 
 export const API = '/api/v1/transcriptions'
+export const FEATURES = '/api/v1/features'
 
 export const LANGUAGE = import.meta.env.VITE_TRANSCRIBE_LANGUAGE ?? 'nl'
 
@@ -29,7 +30,28 @@ export class TranscriptionError extends Error {
   }
 }
 
-export type JobStatus = 'queued' | 'converting' | 'transcribing' | 'done' | 'failed'
+export type JobStatus = 'queued' | 'converting' | 'diarizing' | 'transcribing' | 'done' | 'failed'
+
+/** Een beurt: wie sprak, van wanneer tot wanneer (seconden), en wat. */
+export interface Segment {
+  speaker: string
+  start: number
+  end: number
+  text: string
+}
+
+/** Het resultaat. `segments` alleen als er om sprekers is gevraagd. */
+export interface Transcript {
+  text: string
+  segments?: Segment[]
+  durationSeconds?: number | null
+}
+
+export interface SpeakerOptions {
+  enabled: boolean
+  /** Aantal sprekers als de gebruiker het weet; maakt de indeling betrouwbaarder. */
+  count?: number
+}
 
 export interface Job {
   id: string
@@ -38,17 +60,19 @@ export interface Job {
   durationSeconds: number | null
   progress: { completed: number; total: number }
   text?: string
+  segments?: Segment[]
   error?: string
 }
 
 export type Progress =
   | { phase: 'uploading'; fraction: number }
-  | { phase: 'queued' | 'converting' }
+  | { phase: 'queued' | 'converting' | 'diarizing' }
   | { phase: 'transcribing'; completed: number; total: number; durationSeconds: number | null }
 
 export interface TranscribeOptions {
   signal?: AbortSignal
   language?: string
+  speakers?: SpeakerOptions
   onProgress?: (p: Progress) => void
 }
 
@@ -59,9 +83,9 @@ export function isAbort(err: unknown): boolean {
 export async function transcribe(
   audio: Blob,
   filename: string,
-  { signal, language = LANGUAGE, onProgress }: TranscribeOptions = {},
-): Promise<string> {
-  const job = await upload(audio, filename, language, signal, (fraction) =>
+  { signal, language = LANGUAGE, speakers, onProgress }: TranscribeOptions = {},
+): Promise<Transcript> {
+  const job = await upload(audio, filename, language, speakers, signal, (fraction) =>
     onProgress?.({ phase: 'uploading', fraction }),
   )
   try {
@@ -79,6 +103,7 @@ function upload(
   audio: Blob,
   filename: string,
   language: string,
+  speakers: SpeakerOptions | undefined,
   signal: AbortSignal | undefined,
   onUpload: (fraction: number) => void,
 ): Promise<Job> {
@@ -88,6 +113,10 @@ function upload(
     const body = new FormData()
     body.append('file', audio, filename)
     body.append('language', language)
+    if (speakers?.enabled) {
+      body.append('speakers', 'true')
+      if (speakers.count) body.append('numSpeakers', String(speakers.count))
+    }
 
     const xhr = new XMLHttpRequest()
     xhr.open('POST', API)
@@ -116,7 +145,7 @@ async function poll(job: Job, signal: AbortSignal | undefined, onProgress?: Tran
     if (current.status === 'done') {
       const text = current.text?.trim() ?? ''
       if (!text) throw new TranscriptionError('Er is geen spraak herkend in deze opname.')
-      return text
+      return { text, segments: current.segments, durationSeconds: current.durationSeconds }
     }
     if (current.status === 'failed') {
       throw new TranscriptionError(current.error || 'Het transcriberen is mislukt.')
@@ -148,7 +177,8 @@ async function fetchJob(id: string, signal?: AbortSignal): Promise<Job> {
 
 function report(job: Job, onProgress?: TranscribeOptions['onProgress']) {
   if (!onProgress) return
-  if (job.status === 'queued' || job.status === 'converting') onProgress({ phase: job.status })
+  if (job.status === 'queued' || job.status === 'converting' || job.status === 'diarizing')
+    onProgress({ phase: job.status })
   else if (job.status === 'transcribing')
     onProgress({
       phase: 'transcribing',
@@ -156,6 +186,17 @@ function report(job: Job, onProgress?: TranscribeOptions['onProgress']) {
       total: job.progress.total,
       durationSeconds: job.durationSeconds,
     })
+}
+
+/** Wat deze server kan. Gaat het mis, dan doen we alsof er geen sprekers zijn. */
+export async function fetchFeatures(): Promise<{ speakers: boolean }> {
+  try {
+    const res = await fetch(FEATURES)
+    const data = res.ok ? parse(await res.text()) : null
+    return { speakers: data?.speakers === true }
+  } catch {
+    return { speakers: false }
+  }
 }
 
 function wait(ms: number, signal?: AbortSignal): Promise<void> {

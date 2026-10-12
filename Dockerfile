@@ -32,7 +32,9 @@ RUN apt-get update \
 WORKDIR /app
 
 COPY pyproject.toml uv.lock ./
-RUN uv sync --frozen --no-dev --no-install-project
+# Zonder de groep `diarization` (pyannote, torch): in productie herkent
+# vlam-api de sprekers zelf (DIARIZATION=service).
+RUN uv sync --frozen --no-default-groups --no-install-project
 
 COPY backend ./backend
 COPY --from=frontend /app/dist ./dist
@@ -44,6 +46,7 @@ USER app
 ENV PATH="/app/.venv/bin:$PATH" \
     PYTHONUNBUFFERED=1 \
     STATIC_DIR=/app/dist \
+    DIARIZATION=service \
     MAX_AUDIO_SECONDS=7200 \
     MAX_UPLOAD_MB=500
 

@@ -3,7 +3,8 @@
 Spraak omzetten naar tekst voor medewerkers van het ministerie van Financiën.
 Upload een audiobestand of neem direct op in de browser, tot **2 uur** lang.
 Je krijgt de uitgeschreven tekst terug, die je kunt aanpassen, kopiëren of
-downloaden als .txt of .docx.
+downloaden als .txt of .docx. Met **sprekerherkenning** staat er per beurt wie
+er sprak; je geeft sprekers een naam en exporteert het als gespreksverslag.
 
 - **Frontend:** Vue 3 + TypeScript + Vite, met het
   [NLDD Designsysteem](https://nederlandsedigitaledienst.github.io/design-system/)
@@ -31,6 +32,20 @@ browser ──upload──► backend ──ffprobe: ≤ 2 uur?──► ffmpeg:
   (met voortgang) en vraagt daarna elke 2 seconden de status op. De backend
   knipt in stukken van hoogstens 10 minuten, bij voorkeur midden in een stilte,
   zodat er geen woord doormidden gaat.
+- **Sprekers.** Met de schakelaar *Sprekers herkennen* komt het transcript terug
+  als beurten (`segments`: spreker, begin, eind, tekst). Waar dat gebeurt hangt
+  af van `DIARIZATION`:
+  - `service` (productie): vlam-api doet het zelf (`response_format=diarized_json`).
+    De hele opname gaat dan in één aanvraag, anders krijgt elk stuk eigen
+    sprekerlabels. Zie [docs/vlam-ai.md](docs/vlam-ai.md#sprekerherkenning).
+  - `local` (standaard lokaal, voor Ollama): de backend draait zelf
+    [pyannote speaker-diarization-community-1](https://huggingface.co/pyannote/speaker-diarization-community-1),
+    hetzelfde model als vlam-api. Daarna gaat elke beurt los naar Voxtral. Lange
+    beurten worden geknipt zoals hierboven. De voortgang telt dan beurten.
+  - `off`: geen sprekers; de schakelaar verdwijnt.
+
+  Namen die de gebruiker invult, samengevoegde sprekers en verplaatste beurten
+  blijven in de browser. De server kent alleen `S1`, `S2`, ….
 - **De sleutel** van de transcriptiedienst zit alleen in de backend (een Container
   App-secret). De browser ziet hem nooit.
 - **Niets blijft bewaard.** Audio staat alleen tijdens de verwerking in een
@@ -71,7 +86,23 @@ npm run api
 npm run dev
 ```
 
-Open <http://localhost:5173>. Vite stuurt `/api` door naar de backend. Zonder
+Open <http://localhost:5173>. Vite stuurt `/api` door naar de backend.
+
+**Sprekerherkenning lokaal.** Die draait in de backend met pyannote (de
+uv-groep `diarization`, die `uv sync` standaard meeneemt). Het model staat achter een gebruikersovereenkomst op Hugging Face,
+dus alleen voor de eerste download moet je ingelogd zijn:
+
+```bash
+# 1. Accepteer de voorwaarden op
+#    https://huggingface.co/pyannote/speaker-diarization-community-1
+# 2. Eén keer inloggen (of zet HF_TOKEN in .env.local)
+uv run hf auth login
+```
+
+Bij de eerste opname met sprekers wordt het model opgehaald. Daarna
+staat het in `~/.cache/huggingface` en is geen sleutel meer nodig.
+`DIARIZATION_MODEL` mag ook een map zijn waarin je het model zelf hebt gezet.
+Zonder model biedt de app geen sprekerherkenning aan. Zonder
 `.env.local` gebruikt de backend Ollama op `localhost:11434` met het model
 hierboven. Andere waarden zet je in `.env.local` (zie `.env.example`).
 
@@ -90,14 +121,19 @@ curl -s localhost:11434/v1/audio/transcriptions \
 docker build -t transcriptie .
 docker run -p 8000:8000 \
   -e TRANSCRIBE_URL=http://host.docker.internal:11434/v1/audio/transcriptions \
+  -e DIARIZATION=off \
   transcriptie
 ```
+
+Het image heeft geen pyannote: daarin herkent vlam-api de sprekers
+(`DIARIZATION=service`, de standaard in het image). Met Ollama als dienst zet je
+`DIARIZATION=off`, zoals hierboven.
 
 ### Tests
 
 ```bash
 npm test          # frontend (vitest): service, state machine, export, NLDD-registratie
-npm run test:api  # backend (pytest): knippen, API, adapter; gebruikt ffmpeg
+npm run test:api  # backend (pytest): knippen, beurten, API, adapter; gebruikt ffmpeg
 uv run ruff check backend
 ```
 
@@ -114,8 +150,9 @@ fouten en een `API-Version`-header.
 
 | | |
 |---|---|
-| `POST /api/v1/transcriptions` | multipart `file` (+ optioneel `language`) → `202` met de taak en een `Location`-header. `413` te groot, `415` geen audio, `422` langer dan 2 uur |
-| `GET /api/v1/transcriptions/{id}` | `{ status: queued \| converting \| transcribing \| done \| failed, progress: {completed, total}, durationSeconds, text?, error? }` |
+| `POST /api/v1/transcriptions` | multipart `file` (+ optioneel `language`, `speakers=true`, `numSpeakers`) → `202` met de taak en een `Location`-header. `413` te groot, `415` geen audio, `422` langer dan 2 uur, ongeldig aantal sprekers of sprekerherkenning niet beschikbaar |
+| `GET /api/v1/transcriptions/{id}` | `{ status: queued \| converting \| diarizing \| transcribing \| done \| failed, progress: {completed, total}, durationSeconds, text?, speakers?, segments?, error? }`. `segments` is `[{speaker, start, end, text}]`, alleen met `speakers=true` |
+| `GET /api/v1/features` | `{ speakers: bool }`: kan deze server sprekers herkennen |
 | `DELETE /api/v1/transcriptions/{id}` | annuleren en alles weggooien |
 | `GET /api/v1/health` | health probe |
 
@@ -134,7 +171,8 @@ bereikbaar achter een IP-allowlist.
   zijn taak niet kent, en bij schalen naar nul verdwijnen lopende taken.
 - **Secrets** in de variable group `transcriptie-secrets`: `TRANSCRIBE_URL` en
   `TRANSCRIBE_API_KEY` (allebei als secret markeren), en optioneel
-  `TRANSCRIBE_MODEL` en `TRANSCRIBE_API_KEY_HEADER`. De pipeline zet ze als
+  `TRANSCRIBE_MODEL`, `TRANSCRIBE_API_KEY_HEADER` en `DIARIZATION` (standaard
+  `service`). De pipeline zet ze als
   Container App-secrets.
 
 Eenmalige setup: maak `transcriptie-secrets` aan, autoriseer de pipeline voor
@@ -147,6 +185,12 @@ Eenmalige setup: maak `transcriptie-secrets` aan, autoriseer de pipeline voor
   en neem de verwerking op in het verwerkingsregister. De app wijst gebruikers
   erop dat ze geen bijzondere persoonsgegevens uploaden zonder toestemming, en
   dat ze aanwezigen vragen of opnemen goed is.
+- **Stemkenmerken.** Sprekerherkenning berekent per stem een kenmerk
+  (embedding) om stukken van dezelfde stem te groeperen. Dat gebeurt alleen
+  binnen één opname en alleen in het geheugen, tijdens de taak. Er is geen
+  koppeling met namen of andere opnames, en niets wordt bewaard. Stemkenmerken
+  liggen dicht tegen biometrische gegevens (art. 9 AVG) aan: neem dit mee in de
+  DPIA. De app legt het de gebruiker uit onder "Goed om te weten".
 - **Algoritmeregister.** vlam.ai hanteert *registreren tenzij* voor pilots en
   productie; zie [docs/vlam-ai.md](docs/vlam-ai.md).
 - **AI-transparantie.** Het resultaat is gemarkeerd als automatisch gegenereerd,
@@ -164,8 +208,6 @@ Eenmalige setup: maak `transcriptie-secrets` aan, autoriseer de pipeline voor
 
 - [docs/vlam-ai.md](docs/vlam-ai.md): de productie-transcriptiedienst, toegang
   krijgen en open punten.
-- [docs/features/meerdere-sprekers.md](docs/features/meerdere-sprekers.md):
-  voorstel voor sprekerherkenning en een export als gespreksverslag.
 
 ## Bijdragen
 

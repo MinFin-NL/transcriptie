@@ -13,6 +13,10 @@ from pathlib import Path
 DEFAULT_URL = "http://localhost:11434/v1/audio/transcriptions"
 DEFAULT_MODEL = "hf.co/bartowski/mistralai_Voxtral-Small-24B-2507-GGUF:Q4_K_M"
 
+# Sprekerherkenning: hetzelfde model dat vlam-api gebruikt (CC-BY-4.0).
+DEFAULT_DIARIZATION_MODEL = "pyannote/speaker-diarization-community-1"
+DIARIZATION_MODES = ("local", "service", "off")
+
 
 def _int(name: str, default: int) -> int:
     raw = os.environ.get(name, "").strip()
@@ -60,11 +64,36 @@ class Settings:
     # Een klaar transcript blijft zo lang in het geheugen, daarna is het weg.
     result_ttl_seconds: int = field(default_factory=lambda: _int("RESULT_TTL_SECONDS", 60 * 60))
 
+    # Sprekerherkenning. "local": pyannote in dit proces, daarna per beurt naar
+    # de transcriptiedienst (Ollama/Voxtral levert zelf geen sprekers).
+    # "service": de transcriptiedienst doet het zelf (vlam-api, diarized_json).
+    # "off": geen sprekers.
+    diarization: str = field(
+        default_factory=lambda: (os.environ.get("DIARIZATION", "") or "local").strip().lower()
+    )
+    diarization_model: str = field(
+        default_factory=lambda: os.environ.get("DIARIZATION_MODEL", "") or DEFAULT_DIARIZATION_MODEL
+    )
+    # Alleen nodig om het model de eerste keer op te halen; in het image staat
+    # het er al in.
+    hf_token: str = field(default_factory=lambda: os.environ.get("HF_TOKEN", ""))
+    # vlam-api diariseert per aanvraag: "spreker 1" in stuk 2 is niet per se
+    # "spreker 1" in stuk 1. Daarom bij sprekerherkenning de hele opname in één
+    # keer; alleen als de dienst een grens heeft, knippen we toch.
+    diarize_chunk_seconds: int = field(default_factory=lambda: _int("DIARIZE_CHUNK_SECONDS", 2 * 60 * 60))
+    # Een hele opname van 2 uur in één aanvraag duurt langer dan een stuk van 10
+    # minuten.
+    diarize_timeout_seconds: int = field(default_factory=lambda: _int("DIARIZE_TIMEOUT_SECONDS", 60 * 60))
+
     static_dir: Path = field(
         default_factory=lambda: Path(
             os.environ.get("STATIC_DIR", "") or Path(__file__).resolve().parents[2] / "dist"
         )
     )
+
+    def __post_init__(self) -> None:
+        if self.diarization not in DIARIZATION_MODES:
+            raise ValueError(f"DIARIZATION moet een van {', '.join(DIARIZATION_MODES)} zijn")
 
     def auth_headers(self) -> dict[str, str]:
         if not self.api_key:

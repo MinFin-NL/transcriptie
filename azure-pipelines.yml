@@ -6,6 +6,9 @@
 # transcription service: vlam-api of vlam.ai (SSC-ICT), see docs/vlam-ai.md. Its
 # URL and key come from the secrets and live only as Container App secrets, never
 # in the image or the JS bundle. vlam-api keys expire after 6 months.
+#
+# Speaker recognition: vlam-api does it (DIARIZATION=service,
+# response_format=diarized_json). The image has no local diarization model.
 trigger:
   branches:
     include:
@@ -19,7 +22,8 @@ pool:
 
 variables:
   # This app's own variable group: TRANSCRIBE_URL and TRANSCRIBE_API_KEY (mark
-  # both secret in ADO), optional TRANSCRIBE_MODEL and TRANSCRIBE_API_KEY_HEADER.
+  # both secret in ADO), optional TRANSCRIBE_MODEL, TRANSCRIBE_API_KEY_HEADER
+  # and DIARIZATION (service | off).
   - group: transcriptie-secrets
   # Shared variable group: AZURE_SERVICE_CONNECTION and the allowlist IPs
   # (ALLOWED_IP_1..ALLOWED_IP_4). Listed last so its AZURE_SERVICE_CONNECTION wins.
@@ -85,6 +89,7 @@ stages:
               TRANSCRIBE_API_KEY: $(TRANSCRIBE_API_KEY)
               TRANSCRIBE_MODEL: $(TRANSCRIBE_MODEL)
               TRANSCRIBE_API_KEY_HEADER: $(TRANSCRIBE_API_KEY_HEADER)
+              DIARIZATION: $(DIARIZATION)
             inputs:
               azureSubscription: $(AZURE_SERVICE_CONNECTION)
               scriptType: bash
@@ -103,6 +108,9 @@ stages:
                 TRANSCRIBE_MODEL=$(clean "$TRANSCRIBE_MODEL")
                 TRANSCRIBE_API_KEY_HEADER=$(clean "$TRANSCRIBE_API_KEY_HEADER")
                 TRANSCRIBE_API_KEY_HEADER=${TRANSCRIBE_API_KEY_HEADER:-Authorization}
+                # vlam-api recognises speakers itself; "off" hides the switch.
+                DIARIZATION=$(clean "$DIARIZATION")
+                DIARIZATION=${DIARIZATION:-service}
 
                 if [ -z "$TRANSCRIBE_URL" ]; then
                   echo "##[error]TRANSCRIBE_URL missing from the transcriptie-secrets variable group." >&2
@@ -114,6 +122,7 @@ stages:
                   "TRANSCRIBE_URL=secretref:transcribe-url"
                   "TRANSCRIBE_API_KEY_HEADER=${TRANSCRIBE_API_KEY_HEADER}"
                   "TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL}"
+                  "DIARIZATION=${DIARIZATION}"
                 )
                 if [ -n "$TRANSCRIBE_API_KEY" ]; then
                   SECRETS+=("transcribe-api-key=${TRANSCRIBE_API_KEY}")

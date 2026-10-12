@@ -4,8 +4,10 @@ API (volgt de NL GOV API Design Rules waar dat voor zo'n kleine API zin heeft:
 /api/v1, meervoud, problem+json, API-Version-header):
 
     POST   /api/v1/transcriptions        audio uploaden → 202 + taak
-    GET    /api/v1/transcriptions/{id}   status, voortgang en (als klaar) tekst
+    GET    /api/v1/transcriptions/{id}   status, voortgang en (als klaar) tekst,
+                                         met sprekers: ook speakers en segments
     DELETE /api/v1/transcriptions/{id}   annuleren en alles weggooien
+    GET    /api/v1/features              wat deze server kan (sprekerherkenning)
     GET    /api/v1/health                voor de health probe
 """
 
@@ -21,13 +23,16 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 
 from . import audio
 from .config import Settings, load_settings
+from .diarizer import Diarizer
 from .jobs import JobStore
 from .transcriber import Transcriber
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("transcriptie")
 
-API_VERSION = "1.0.0"
+API_VERSION = "1.1.0"
+
+MAX_SPEAKERS = 20
 
 SECURITY_HEADERS = {
     # Alleen de eigen origin. style-src houdt 'unsafe-inline' omdat de
@@ -63,10 +68,12 @@ def create_app(settings: Settings | None = None, store: JobStore | None = None) 
         transcriber = None
         if store is None:
             transcriber = Transcriber(settings)
-            app.state.store = JobStore(settings, transcriber)
+            diarizer = Diarizer(settings) if settings.diarization == "local" else None
+            app.state.store = JobStore(settings, transcriber, diarizer)
         else:
             app.state.store = store
         log.info("transcriptiedienst: %s (model %s)", settings.transcribe_url, settings.transcribe_model)
+        log.info("sprekerherkenning: %s", settings.diarization)
         yield
         await app.state.store.shutdown()
         if transcriber:
@@ -87,15 +94,39 @@ def create_app(settings: Settings | None = None, store: JobStore | None = None) 
     async def health() -> dict:
         return {"status": "ok"}
 
+    @app.get("/api/v1/features")
+    async def features(request: Request) -> dict:
+        return {"speakers": request.app.state.store.speakers_available()}
+
     @app.post("/api/v1/transcriptions", status_code=202)
-    async def create(request: Request, file: UploadFile, language: str | None = Form(None)):
+    async def create(
+        request: Request,
+        file: UploadFile,
+        language: str | None = Form(None),
+        speakers: str | None = Form(None),
+        num_speakers: str | None = Form(None, alias="numSpeakers"),
+    ):
+        store: JobStore = request.app.state.store
+        want_speakers = (speakers or "").strip().lower() in ("true", "1", "ja")
+        if want_speakers and not store.speakers_available():
+            return problem(
+                422, "Sprekerherkenning niet beschikbaar", "Zet sprekerherkenning uit en probeer het opnieuw."
+            )
+        count: int | None = None
+        if want_speakers and (num_speakers or "").strip():
+            try:
+                count = int(num_speakers)
+            except ValueError:
+                count = -1
+            if not 1 <= count <= MAX_SPEAKERS:
+                return problem(422, "Ongeldig aantal sprekers", f"Kies een aantal van 1 tot {MAX_SPEAKERS}.")
+
         max_bytes = settings.max_upload_bytes
         max_mb = max_bytes // (1024 * 1024)
         declared = int(request.headers.get("content-length") or 0)
         if declared > max_bytes + 1024 * 1024:
             return problem(413, "Bestand te groot", f"Het maximum is {max_mb} MB.")
 
-        store: JobStore = request.app.state.store
         workdir = store.new_workdir()
         suffix = Path(file.filename or "").suffix[:10] or ".bin"
         upload = workdir / f"upload{suffix}"
@@ -134,7 +165,7 @@ def create_app(settings: Settings | None = None, store: JobStore | None = None) 
             raise
 
         lang = (language if language is not None else settings.language).strip() or None
-        job = store.start(upload, file.filename or "audio", lang, workdir)
+        job = store.start(upload, file.filename or "audio", lang, workdir, want_speakers, count)
         return JSONResponse(
             job.public(), status_code=202, headers={"Location": f"/api/v1/transcriptions/{job.id}"}
         )
