@@ -1,0 +1,34 @@
+# Node
+node_modules/
+npm-debug.log*
+
+# Vite build output
+dist/
+
+# Environment variables: de sleutel van de transcriptiedienst hoort nooit in git
+.env
+.env.*
+!.env.example
+
+# IDE
+.idea/
+.vscode/
+
+# macOS
+.DS_Store
+
+# Test / coverage
+coverage/
+
+# Lokale testopnames
+*.mp3
+*.m4a
+*.wav
+*.webm
+*.ogg
+
+# Python
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/

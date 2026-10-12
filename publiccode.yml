@@ -1,0 +1,79 @@
+# This repository adheres to the publiccode.yml standard by including this
+# metadata file that makes public software easily discoverable.
+# More info at https://github.com/publiccodeyml/publiccode.yml
+
+publiccodeYmlVersion: "0"
+
+name: Transcriptie
+# TODO: de definitieve URL van de publieke repository invullen.
+url: "https://github.com/OWNER/transcriptie"
+
+softwareVersion: "0.1.0"
+releaseDate: "2026-10-12"
+
+softwareType: standalone/web
+
+platforms:
+  - web
+
+categories:
+  - office
+  - document-management
+  - knowledge-management
+
+developmentStatus: beta
+
+description:
+  nl:
+    shortDescription: >-
+      Spraak omzetten naar tekst: upload een audiobestand of neem op in de
+      browser (tot 2 uur) en exporteer het transcript.
+    longDescription: >
+      Transcriptie is een webapplicatie waarmee medewerkers van de overheid
+      opnames van overleggen, interviews en andere gesprekken laten uitschrijven.
+      Je uploadt een audiobestand of neemt direct op in de browser, tot twee uur
+      lang. De backend knipt lange opnames op in stukken (bij voorkeur in een
+      stilte), stuurt die naar een transcriptiedienst en houdt de voortgang bij.
+      Het resultaat is aan te passen en te exporteren als tekst of Word-bestand.
+
+      De transcriptiedienst is verwisselbaar: lokaal draait Voxtral Small 24B in
+      Ollama, in productie wordt vlam-api van vlam.ai (SSC-ICT) gebruikt. Audio
+      wordt na het uitschrijven direct gewist en er is geen database. De
+      interface is gebouwd met het NLDD Designsysteem en getoetst op WCAG 2.2 AA.
+    features:
+      - Audiobestand uploaden (mp3, m4a, wav, webm, ogg, mp4)
+      - Opnemen in de browser
+      - Opnames tot 2 uur, opgeknipt in stukken met voortgangsweergave
+      - Transcript bewerken, kopiëren en exporteren als .txt en .docx
+      - Verwisselbare transcriptiedienst (Voxtral via Ollama, vlam-api)
+
+legal:
+  license: EUPL-1.2
+  mainCopyrightOwner: Ministerie van Financiën
+
+organisation:
+  name: Ministerie van Financiën
+  uri: "https://www.rijksoverheid.nl/ministeries/ministerie-van-financien"
+
+intendedAudience:
+  countries:
+    - NL
+  scope:
+    - government
+
+localisation:
+  availableLanguages:
+    - nl
+  localisationReady: false
+
+dependsOn:
+  open:
+    - name: ffmpeg
+      versionMin: "5.0"
+
+maintenance:
+  type: internal
+  contacts:
+    - name: Team Innovatiemanagement Financiën
+      email: innovatiemanagementfinancien@minfin.nl
+      affiliation: Ministerie van Financiën

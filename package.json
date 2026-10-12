@@ -1,0 +1,33 @@
+{
+  "name": "transcriptie",
+  "version": "0.1.0",
+  "description": "Transcriptie – audio uploaden of opnemen (tot 2 uur) en laten uitschrijven",
+  "private": true,
+  "type": "module",
+  "license": "EUPL-1.2",
+  "engines": {
+    "node": ">=22.22"
+  },
+  "scripts": {
+    "dev": "vite",
+    "api": "uv run uvicorn app.main:app --app-dir backend --reload --port 8010",
+    "build": "vue-tsc && vite build",
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:api": "uv run pytest"
+  },
+  "dependencies": {
+    "@nldd/design-system": "0.8.96",
+    "docx": "^9.7.1",
+    "vue": "^3.5.41"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-vue": "^6.0.8",
+    "jsdom": "^30.0.1",
+    "typescript": "^6.0.3",
+    "vite": "^8.2.1",
+    "vitest": "^4.1.10",
+    "vue-tsc": "^3.3.9"
+  }
+}

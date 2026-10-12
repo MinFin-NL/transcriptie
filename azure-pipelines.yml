@@ -1,0 +1,201 @@
+# Builds one image into the ACR of the resource group and rolls it out as one
+# Container App, external behind an IP allowlist.
+#
+# One container: FastAPI serves the Vue build and the API. The
+# backend splits audio (up to 2 hours) into chunks and sends each one to the
+# transcription service: vlam-api of vlam.ai (SSC-ICT), see docs/vlam-ai.md. Its
+# URL and key come from the secrets and live only as Container App secrets, never
+# in the image or the JS bundle. vlam-api keys expire after 6 months.
+trigger:
+  branches:
+    include:
+      - main
+  paths:
+    exclude:
+      - README.md
+
+pool:
+  name: alz-p-mgmt-we-ccoe-pool
+
+variables:
+  # This app's own variable group: TRANSCRIBE_URL and TRANSCRIBE_API_KEY (mark
+  # both secret in ADO), optional TRANSCRIBE_MODEL and TRANSCRIBE_API_KEY_HEADER.
+  - group: transcriptie-secrets
+  # Shared variable group: AZURE_SERVICE_CONNECTION and the allowlist IPs
+  # (ALLOWED_IP_1..ALLOWED_IP_4). Listed last so its AZURE_SERVICE_CONNECTION wins.
+  - group: invulhulp-secrets
+  - name: IMAGE
+    value: transcriptie
+  - name: RESOURCE_GROUP
+    value: rg-invulhulp-inno-d
+  - name: CONTAINER_APP_ENV
+    value: cae-invulhulp-inno-d
+  - name: APP
+    value: ca-transcriptie-inno-d
+
+stages:
+  - stage: Build
+    displayName: Build and push image
+    jobs:
+      - job: Build
+        displayName: Docker build and push to ACR
+        steps:
+          - task: AzureCLI@2
+            displayName: Build and push
+            env:
+              IMAGE_TAG: $(Build.SourceVersion)
+              IMAGE: $(IMAGE)
+              RESOURCE_GROUP: $(RESOURCE_GROUP)
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                ACR_LOGIN_SERVER=$(az acr list --resource-group "$RESOURCE_GROUP" --query "[0].loginServer" -o tsv)
+                az acr login --name "${ACR_LOGIN_SERVER%%.*}"
+                # The Dockerfile runs the frontend tests before the build, so a
+                # failing test fails this step.
+                docker build \
+                  -t "$ACR_LOGIN_SERVER/$IMAGE:$IMAGE_TAG" \
+                  -t "$ACR_LOGIN_SERVER/$IMAGE:latest" .
+                docker push "$ACR_LOGIN_SERVER/$IMAGE:$IMAGE_TAG"
+                docker push "$ACR_LOGIN_SERVER/$IMAGE:latest"
+
+  - stage: Deploy
+    displayName: Deploy to Container Apps
+    dependsOn: Build
+    # Only main deploys; PR runs build the image but never touch the app.
+    condition: and(succeeded(), eq(variables['Build.SourceBranch'], 'refs/heads/main'))
+    jobs:
+      - job: Deploy
+        displayName: Deploy app
+        steps:
+          - task: AzureCLI@2
+            displayName: Deploy app
+            env:
+              IMAGE_TAG: $(Build.SourceVersion)
+              IMAGE: $(IMAGE)
+              APP: $(APP)
+              RESOURCE_GROUP: $(RESOURCE_GROUP)
+              CONTAINER_APP_ENV: $(CONTAINER_APP_ENV)
+              # From the transcriptie-secrets variable group. Secret variables
+              # are not exposed to scripts unless mapped here explicitly.
+              TRANSCRIBE_URL: $(TRANSCRIBE_URL)
+              TRANSCRIBE_API_KEY: $(TRANSCRIBE_API_KEY)
+              TRANSCRIBE_MODEL: $(TRANSCRIBE_MODEL)
+              TRANSCRIBE_API_KEY_HEADER: $(TRANSCRIBE_API_KEY_HEADER)
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                ACR_LOGIN_SERVER=$(az acr list --resource-group "$RESOURCE_GROUP" --query "[0].loginServer" -o tsv)
+                ACR_NAME="${ACR_LOGIN_SERVER%%.*}"
+                ACR_USER=$(az acr credential show --name "$ACR_NAME" --query username -o tsv)
+                ACR_PASS=$(az acr credential show --name "$ACR_NAME" --query "passwords[0].value" -o tsv)
+
+                # An unset ADO variable expands to the literal "$(NAME)"; treat that as empty.
+                clean() { case "$1" in '$('*) echo "";; *) echo "$1";; esac; }
+                TRANSCRIBE_URL=$(clean "$TRANSCRIBE_URL")
+                TRANSCRIBE_API_KEY=$(clean "$TRANSCRIBE_API_KEY")
+                TRANSCRIBE_MODEL=$(clean "$TRANSCRIBE_MODEL")
+                TRANSCRIBE_API_KEY_HEADER=$(clean "$TRANSCRIBE_API_KEY_HEADER")
+                TRANSCRIBE_API_KEY_HEADER=${TRANSCRIBE_API_KEY_HEADER:-Authorization}
+
+                if [ -z "$TRANSCRIBE_URL" ]; then
+                  echo "##[error]TRANSCRIBE_URL missing from the transcriptie-secrets variable group." >&2
+                  exit 1
+                fi
+                # The URL is a secret too: it can identify internal infrastructure.
+                SECRETS=("transcribe-url=${TRANSCRIBE_URL}")
+                ENV_VARS=(
+                  "TRANSCRIBE_URL=secretref:transcribe-url"
+                  "TRANSCRIBE_API_KEY_HEADER=${TRANSCRIBE_API_KEY_HEADER}"
+                  "TRANSCRIBE_MODEL=${TRANSCRIBE_MODEL}"
+                )
+                if [ -n "$TRANSCRIBE_API_KEY" ]; then
+                  SECRETS+=("transcribe-api-key=${TRANSCRIBE_API_KEY}")
+                  ENV_VARS+=("TRANSCRIBE_API_KEY=secretref:transcribe-api-key")
+                else
+                  echo "##[warning]TRANSCRIBE_API_KEY is empty; requests go to the service without a key."
+                fi
+
+                if az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" &>/dev/null; then
+                  az containerapp secret set \
+                    --name "$APP" \
+                    --resource-group "$RESOURCE_GROUP" \
+                    --secrets "${SECRETS[@]}" \
+                    --output none
+                  az containerapp update \
+                    --name "$APP" \
+                    --resource-group "$RESOURCE_GROUP" \
+                    --image "$ACR_LOGIN_SERVER/$IMAGE:$IMAGE_TAG" \
+                    --min-replicas 1 \
+                    --max-replicas 1 \
+                    --set-env-vars "${ENV_VARS[@]}" \
+                    --output none
+                else
+                  az containerapp create \
+                    --name "$APP" \
+                    --resource-group "$RESOURCE_GROUP" \
+                    --environment "$CONTAINER_APP_ENV" \
+                    --image "$ACR_LOGIN_SERVER/$IMAGE:$IMAGE_TAG" \
+                    --registry-server "$ACR_LOGIN_SERVER" \
+                    --registry-username "$ACR_USER" \
+                    --registry-password "$ACR_PASS" \
+                    --ingress external \
+                    --target-port 8000 \
+                    --env-vars "${ENV_VARS[@]}" \
+                    --secrets "${SECRETS[@]}" \
+                    --cpu 1.0 --memory 2.0Gi \
+                    --min-replicas 1 --max-replicas 1 \
+                    --output none
+                fi
+                # One replica, always on: transcription jobs live in the memory
+                # of that one process (the browser polls the replica that holds
+                # its job), and a scale-to-zero would drop running jobs.
+
+                FQDN=$(az containerapp show --name "$APP" --resource-group "$RESOURCE_GROUP" --query properties.configuration.ingress.fqdn -o tsv)
+                echo "Deployed: https://${FQDN}"
+
+          - task: AzureCLI@2
+            displayName: Apply firewall rules
+            env:
+              APP: $(APP)
+              RESOURCE_GROUP: $(RESOURCE_GROUP)
+              ALLOWED_IP_1: $(ALLOWED_IP_1)
+              ALLOWED_IP_2: $(ALLOWED_IP_2)
+              ALLOWED_IP_3: $(ALLOWED_IP_3)
+              ALLOWED_IP_4: $(ALLOWED_IP_4)
+            inputs:
+              azureSubscription: $(AZURE_SERVICE_CONNECTION)
+              scriptType: bash
+              scriptLocation: inlineScript
+              inlineScript: |
+                set -euo pipefail
+                az containerapp ingress access-restriction set \
+                  --name "$APP" \
+                  --resource-group "$RESOURCE_GROUP" \
+                  --rule-name "Allowed range 1" \
+                  --ip-address "$ALLOWED_IP_1" \
+                  --action Allow
+                az containerapp ingress access-restriction set \
+                  --name "$APP" \
+                  --resource-group "$RESOURCE_GROUP" \
+                  --rule-name "Allowed range 2" \
+                  --ip-address "$ALLOWED_IP_2" \
+                  --action Allow
+                az containerapp ingress access-restriction set \
+                  --name "$APP" \
+                  --resource-group "$RESOURCE_GROUP" \
+                  --rule-name "Allowed range 3" \
+                  --ip-address "$ALLOWED_IP_3" \
+                  --action Allow
+                az containerapp ingress access-restriction set \
+                  --name "$APP" \
+                  --resource-group "$RESOURCE_GROUP" \
+                  --rule-name "Allowed range 4" \
+                  --ip-address "$ALLOWED_IP_4" \
+                  --action Allow

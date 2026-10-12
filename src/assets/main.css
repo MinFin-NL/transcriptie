@@ -1,0 +1,16 @@
+/* NLDD: fonts, reset en tokens. Alle kleuren komen uit de componenten zelf;
+   hier staat alleen wat geen component is. */
+@import '@nldd/design-system/styles';
+
+/* Tekst die alleen een schermlezer hoeft te horen. */
+.visually-hidden {
+  position: absolute !important;
+  inline-size: 1px;
+  block-size: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}

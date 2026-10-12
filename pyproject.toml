@@ -1,0 +1,28 @@
+[project]
+name = "transcriptie-backend"
+version = "0.1.0"
+description = "Transcriptie: knipt audio op en stuurt het naar een transcriptiedienst (Voxtral)"
+requires-python = ">=3.12"
+license = "EUPL-1.2"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "httpx>=0.28",
+    "python-multipart>=0.0.20",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.8",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
+asyncio_mode = "auto"
+
+[tool.ruff]
+line-length = 110
+src = ["backend"]
